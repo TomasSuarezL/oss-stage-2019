@@ -11,20 +11,34 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MinMaxScaler, LabelEncoder
 from sklearn.decomposition import PCA, KernelPCA
 from sklearn.feature_selection import VarianceThreshold
-from sklearn.metrics import silhouette_samples, silhouette_score
-from sklearn.cluster import KMeans
-
+from sklearn.metrics import silhouette_samples, silhouette_score, normalized_mutual_info_score, confusion_matrix, classification_report
+from sklearn.cluster import KMeans, SpectralClustering, AgglomerativeClustering
+from sklearn.linear_model import LogisticRegression
+from sklearn.svm import SVC
+from sklearn.ensemble import RandomForestClassifier
+    
 from typing import Tuple
 
-def prepare_datasets(X: pd.DataFrame, y:pd.DataFrame, test_size: float):
-    
+def prepare_datasets(X: pd.DataFrame, y:pd.DataFrame, test_size:float = 0.2, swap_noise:float = 0.15):
+    """Dataset Preprocessing function that splits the datasets into train and test sets, Selects the 25% features with more variance, 
+        generates a noisy training dataset, normalizes all datasets, and returns all the preprocessed datasets needed to train the models. 
+       Parameters: X: original dataset features.
+                   y: original dataset labels.
+                   test_size: float indicating the ratio of test to training samples.
+       Returns the training dataset reduced and normalized, the training dataset reduced, noisy and normalized, the test dataset reduced and normalized,
+       the train labels, the test labels, the train labels one-hot encoded and the test labels one-hot encoded
+    """
     # Split into train and test sets
-    X_train, X_test, y_train, y_test = train_test_split(X,y,test_size=test_size, random_state=1) # Drop the Donor ID column from both datasets
+    X_train, X_test, y_train, y_test = train_test_split(X,y,test_size=test_size, random_state=1) 
+    
+    X_std = np.std(X_train)
+    X_threshold = np.percentile(X_std, 75)
+    X_select = X_std > X_threshold
+    X_train = X_train.loc[:,X_select]
+    X_test = X_test.loc[:,X_select]
     
     # Add swap noise to training dataset
-    # Swap Noise 15% - 1700*0.15 = 255
     X_swapped = X_train
-    swap_noise = 0.15
     num_swaps = round(X_train.shape[0]*swap_noise)
     print(f"swapping: {num_swaps} rows.")
 
@@ -134,7 +148,7 @@ def perform_KPCA(X_train, X_test, y_train, y_test, n_components=20, kernel="rbf"
 
     return X_kpca, X_test_kpca
 
-def build_and_train_autoencoder(X_train_input, X_train_reconstruct, X_test, y_train, y_test, encoding_dim=20, regularizer=tf.keras.regularizers.l1_l2(0.0001,0), dropout=0.5, epochs=100):
+def build_and_train_autoencoder(X_train_input, X_train_reconstruct, encoding_dim=20, regularizer=tf.keras.regularizers.l1_l2(0.0001,0), dropout=0.5, epochs=100):
     """Single Input Autoencoder building and training function
        Parameters: X_train: training dataset.
                    X_test: test dataset.
@@ -154,22 +168,25 @@ def build_and_train_autoencoder(X_train_input, X_train_reconstruct, X_test, y_tr
                             loss="mse",
                             metrics=['mse'])
     
+    
+    # Set Early Stop Callback And Reduce LR on Plateu
+    early_stop = keras.callbacks.EarlyStopping(monitor='loss', min_delta=0.0001, patience=10,  mode='auto', baseline=None, restore_best_weights=False, verbose=1)
+    rlrop = keras.callbacks.ReduceLROnPlateau(monitor='loss', min_delta=0.001, patience=5, verbose=1, mode='auto')
+    
     ## TRAINING
     # Fit the training data into the autoencoder.
     history = autoencoder.fit(X_train_input,
                               X_train_reconstruct,
-                              validation_data=(X_test,X_test),
                               epochs=epochs,
-                              verbose=1,
-                              callbacks=[])
+                              verbose=0,
+                              callbacks=[early_stop, rlrop])
     # Plot training vs validation losses
     plt.plot(history.history["loss"], c = 'b', label = "Training")
-    plt.plot(history.history["val_loss"], c = 'r', label = "Validation")
     plt.title("Autoencoder Loss during training epochs")
     plt.legend()
     plt.show()
-    print(history.history["loss"][-1])
-    return autoencoder, encoder, decoder
+    loss = history.history["loss"][-1] 
+    return autoencoder, encoder, decoder, loss
 
 def encode_dataset(X, encoder):
     # Encode datasets using the trained encoder.
@@ -181,106 +198,166 @@ def encode_dataset(X, encoder):
 
 
 def classify(X, X_test, y, y_test, model_type="Model"):
-    """Single Input Autoencoder building and training function
+    """Classification function. Classifies the X dataset using the 3 models: LR, SVM y RF
        Parameters: X: training dataset.
                    X_test: test dataset.
                    y: training labels.
                    y_test: test labels.
-                   encoding_dim: Size of the latent space (bottleneck layer size).
-                   regularizer: keras regularizer object
-                   dropout: float indicating dropout probability
-       Returns the 3 trained models: full autoencoder, the encoder part and the decoder part. We will use the encoder to get the latent representation.
+                   model_type: name of the model, for displaying
+       Returns the test accuracy for the 3 models.
     """
-    # Set Early Stop Callback
-    early_stop = keras.callbacks.EarlyStopping(monitor='val_loss', min_delta=0.0001, patience=10,  mode='auto', baseline=None, restore_best_weights=False, verbose=1)
+    print(f"Results for {model_type}: \n")
+    lr_accuracy = logistic_regression(X, X_test, y, y_test)
+    svm_accuracy = support_vector_machine(X, X_test, y, y_test)
+    rf_accuracy = random_forest(X, X_test, y, y_test)
+    return lr_accuracy, svm_accuracy, rf_accuracy
+    
+def logistic_regression(X_train, X_test, y_train, y_test):
+    """Logistic Regression classifier function, with parameters tuned in Singleomic_Classifiers notebook. Prints the confusion matrix and classification report.
+       Parameters: X: training dataset.
+                   X_test: test dataset.
+                   y: training labels.
+                   y_test: test labels.
+        Returns: The model test accuracy
+    """
+    clf = LogisticRegression(random_state=0, solver='lbfgs', dual=False, penalty='l2', C=0.08)
+    clf.fit(X_train, y_train)
+    # Predict classification with final model
+    y_pred = clf.predict(X_test)
 
-    # Fit best model with dimensionality reduction data
-    classifier = Models.build_best_classifier(input_shape=(X.shape[1],) ,dropout=0.5, l1=0.0001, l2=0.0001)
-    history = classifier.fit(X, y, epochs=150,
-                        validation_split = 0.1, verbose=0, callbacks=[early_stop], shuffle=False)
-    hist = pd.DataFrame(history.history)
+    cm = confusion_matrix(y_test,y_pred)
 
-    test_loss, test_acc = classifier.evaluate(X_test, y_test)
-    print(f"Results for {model_type}: Loss: {test_loss} - Accuracy: {test_acc}")
+    print(cm)
+    print("\n")
+    print(classification_report(y_test,y_pred))
+    test_score = clf.score(X_test  , y_test)
+    print("Training set score for Logistic Regression: %f" % clf.score(X_train, y_train))
+    print("Testing  set score for Logistic Regression: %f" % test_score)
+    return test_score
 
+def support_vector_machine(X_train, X_test, y_train, y_test):
+    """Support Vector Machine classifier function, with parameters tuned in Singleomic_Classifiers notebook. Prints the confusion matrix and classification report.
+       Parameters: X: training dataset.
+                   X_test: test dataset.
+                   y: training labels.
+                   y_test: test labels.
+        Returns: The model test accuracy
+    """
+    svm = SVC(kernel = 'rbf', random_state = 0, gamma=0.1 , C=0.1)
+    svm.fit(X_train, y_train)
+    # Predict classification with final model
+    y_pred = svm.predict(X_test)
 
-def build_best_classifier(input_shape: Tuple, dropout: int, l1: int, l2: int):
-    model = keras.Sequential([
-        layers.Dense(1000, activation=tf.nn.relu ,kernel_regularizer=keras.regularizers.l1_l2(l1,l2), input_shape=input_shape),
-        layers.Dropout(dropout),
-        layers.BatchNormalization(),  
-        layers.Dense(20,activation=tf.nn.relu, kernel_regularizer=keras.regularizers.l1_l2(l1,l2)),
-        layers.Dropout(dropout),
-        layers.BatchNormalization(),
-        layers.Dense(2,activation=tf.nn.softmax)
-  ])
+    cm = confusion_matrix(y_test,y_pred)
 
-    optimizer = tf.keras.optimizers.Adam(0.001)
+    print(cm)
+    print("\n")
+    print(classification_report(y_test,y_pred))
+    test_score = svm.score(X_test  , y_test)
+    print("Training set score for SVM: %f" % svm.score(X_train, y_train))
+    print("Testing  set score for SVM: %f" % test_score)
+    return test_score
 
-    model.compile(loss='categorical_crossentropy',
-                optimizer=optimizer,
-                metrics=['accuracy'])
-    return model
+def random_forest(X_train, X_test, y_train, y_test):
+    """Random Forest classifier function, with parameters tuned in Singleomic_Classifiers notebook. Prints the confusion matrix and classification report.
+       Parameters: X: training dataset.
+                   X_test: test dataset.
+                   y: training labels.
+                   y_test: test labels.
+        Returns: The model test accuracy
+    """
+    rfc = RandomForestClassifier(random_state=0, class_weight="balanced_subsample", n_estimators=140, max_depth=12).fit(X_train, y_train) # try class_weights "balanced" and "balanced_subsample"
+    # Predict classification with final model
+    y_pred = rfc.predict(X_test)
 
+    cm = confusion_matrix(y_test,y_pred)
 
-def cluster(X, n_clusters, model_type="Model"):
-    kmeans = KMeans(n_clusters=n_clusters, random_state=0)
-    cluster_labels = kmeans.fit_predict(X)
-    silhouette_avg = silhouette_score(X, cluster_labels)
+    print(cm)
+    print("\n")
+    print(classification_report(y_test,y_pred))
+    test_score = rfc.score(X_test  , y_test)
+    print("Training set score for RFC: %f" % rfc.score(X_train, y_train))
+    print("Testing  set score for RFC: %f" % test_score)
+    return test_score
+    
+def cluster(X, y, model_type="Model"):
+    """Clustering function. Performs clustering algorithms (KMeans, Hierarchical Clustering and Spectral Clustering) on the input dataset.
+       Parameters: X: training dataset.
+                   y: training labels.
+                   model_type: the name of the model that was used to compute the input dataset.
+        Returns: the resulting silhouette score and mutual information score
+    """
+    n_clusters = [2,3,4,5,6]
+    silhouette_kmeans, mutual_info_kmeans = k_means(X, y, n_clusters, model_type)
+    silhouette_spectral, mutual_info_spectral = spectral_cluster(X, y, n_clusters, model_type)
+    silhouette_hierarchical, mutual_info_hierarchical = hierarchical_cluster(X, y, n_clusters, model_type)
+    return silhouette_kmeans, mutual_info_kmeans, silhouette_spectral, mutual_info_spectral, silhouette_hierarchical, mutual_info_hierarchical
 
-    print(f"{Model} silhoutte score: {silhouette_avg}")
-
-    ### PLOT SILOHUETTE SCORE FOR CLUSTERS
-    # Create a subplot with 1 row and 2 columns
-    fig, (ax1, ax2) = plt.subplots(1, 2)
-    fig.set_size_inches(18, 7)
-
-    # The 1st subplot is the silhouette plot
-    # The silhouette coefficient can range from -1, 1 but in this example all
-    # lie within [-0.1, 1]
-    ax1.set_xlim([-0.1, 1])
-    # The (n_clusters+1)*10 is for inserting blank space between silhouette
-    # plots of individual clusters, to demarcate them clearly.
-    ax1.set_ylim([0, len(X) + (n_clusters + 1) * 10])
-
-    # Compute the silhouette scores for each sample
-    sample_silhouette_values = silhouette_samples(X, cluster_labels)
-
-    y_lower = 10
-    for i in range(n_clusters):
-        # Aggregate the silhouette scores for samples belonging to
-        # cluster i, and sort them
-        ith_cluster_silhouette_values = \
-            sample_silhouette_values[cluster_labels == i]
-
-        ith_cluster_silhouette_values.sort()
-
-        size_cluster_i = ith_cluster_silhouette_values.shape[0]
-        y_upper = y_lower + size_cluster_i
-
-        color = cm.nipy_spectral(float(i) / n_clusters)
-        ax1.fill_betweenx(np.arange(y_lower, y_upper),
-                          0, ith_cluster_silhouette_values,
-                          facecolor=color, edgecolor=color, alpha=0.7)
-
-        # Label the silhouette plots with their cluster numbers at the middle
-        ax1.text(-0.05, y_lower + 0.5 * size_cluster_i, str(i))
-
-        # Compute the new y_lower for next plot
-        y_lower = y_upper + 10  # 10 for the 0 samples
-
-    ax1.set_title("The silhouette plot for the various clusters.")
-    ax1.set_xlabel("The silhouette coefficient values")
-    ax1.set_ylabel("Cluster label")
-
-    # The vertical line for average silhouette score of all the values
-    ax1.axvline(x=silhouette_avg, color="red", linestyle="--")
-
-    ax1.set_yticks([])  # Clear the yaxis labels / ticks
-    ax1.set_xticks([-0.1, 0, 0.2, 0.4, 0.6, 0.8, 1])
-
+def k_means(X, y, n_clusters, model_type="Model"):
+    silhouette_scores = []
+    mutual_info_scores = []
+    mutual_info = 0
+    for n in n_clusters:
+        kmeans = KMeans(n_clusters=n, random_state=0)
+        cluster_labels = kmeans.fit_predict(X)
+        silhouette_avg = silhouette_score(X, cluster_labels)
+        if (n==2):
+            mutual_info = normalized_mutual_info_score(y, cluster_labels,average_method='arithmetic')
+            print(f"mutual information: {mutual_info}")
+        
+        print(f"{model_type} {n} clusters -  silhoutte score: {silhouette_avg}")
+        silhouette_scores.append(silhouette_avg)
+        
+    plt.plot(n_clusters,silhouette_scores)
+    plt.xlabel('Number of Clusters')
+    plt.ylabel('Score')
+    plt.title('Elbow Curve')
     plt.show()
+    return silhouette_scores[0], mutual_info
 
+def spectral_cluster(X, y, n_clusters, model_type="Model"):
+    silhouette_scores = []
+    mutual_info_scores = []
+    mutual_info = 0
+    for n in n_clusters:
+        spectral = SpectralClustering(n_clusters=n, random_state=0)
+        cluster_labels = spectral.fit_predict(X)
+        silhouette_avg = silhouette_score(X, cluster_labels)
+        if (n==2):
+            mutual_info = normalized_mutual_info_score(y, cluster_labels,average_method='arithmetic')
+            print(f"mutual information: {mutual_info}")
+        
+        print(f"{model_type} {n} clusters -  silhoutte score: {silhouette_avg}")
+        silhouette_scores.append(silhouette_avg)
+        
+    plt.plot(n_clusters,silhouette_scores)
+    plt.xlabel('Number of Clusters')
+    plt.ylabel('Score')
+    plt.title('Elbow Curve')
+    plt.show()
+    return silhouette_scores[0], mutual_info
+
+def hierarchical_cluster(X, y, n_clusters, model_type="Model"):
+    silhouette_scores = []
+    mutual_info_scores = []
+    mutual_info = 0
+    for n in n_clusters:
+        hierarchical = AgglomerativeClustering(n_clusters=n)
+        cluster_labels = hierarchical.fit_predict(X)
+        silhouette_avg = silhouette_score(X, cluster_labels)
+        if (n==2):
+            mutual_info = normalized_mutual_info_score(y, cluster_labels,average_method='arithmetic')
+            print(f"mutual information: {mutual_info}")
+        
+        print(f"{model_type} {n} clusters -  silhoutte score: {silhouette_avg}")
+        silhouette_scores.append(silhouette_avg)
+        
+    plt.plot(n_clusters,silhouette_scores)
+    plt.xlabel('Number of Clusters')
+    plt.ylabel('Score')
+    plt.title('Elbow Curve')
+    plt.show()
+    return silhouette_scores[0], mutual_info
 
 # Define the model using the keras functional API
 def build_autoencoder(encoding_dim: int, number_features: int, regularizer: tf.keras.regularizers.Regularizer, dropout: float):
@@ -298,7 +375,7 @@ def build_autoencoder(encoding_dim: int, number_features: int, regularizer: tf.k
     # this is the reduction of our encoded representations, in times.
     print(f"Compression: {number_features/encoding_dim}")
 
-    first_layer_size = number_features/40
+    first_layer_size = 400
     second_layer_size = number_features/120
     
     ## ENCODER
@@ -306,20 +383,9 @@ def build_autoencoder(encoding_dim: int, number_features: int, regularizer: tf.k
     first_input = layers.Input(shape=(number_features))
     # encoder first Hidden Layer - H1
     H1 = layers.Dense(first_layer_size, activation='relu', kernel_regularizer=regularizer)(first_input)
-    # encoder first Dropout Layer - D1
-    D1 = layers.Dropout(dropout)(H1)
-    # encoder first Batch Normalization Layer - BN1
-    BN1 = layers.BatchNormalization()(D1)
-    # encoder second Hidden Layer - H2
-    H2 = layers.Dense(second_layer_size, activation='relu', kernel_regularizer=regularizer)(BN1)
-    # encoder second Dropout Layer - D2
-    D2 = layers.Dropout(dropout)(H2)
-    # encoder first path second Batch Normalization Layer - BN2
-    BN2 = layers.BatchNormalization()(D2)
-
    
     ## BOTTLENECK 
-    bottleneck = layers.Dense(encoding_dim, activation='relu', kernel_regularizer=regularizer)(BN2)
+    bottleneck = layers.Dense(encoding_dim, activation='relu', kernel_regularizer=regularizer)(H1)
 
     # this model maps an input to its encoded representation
     encoder = keras.models.Model(first_input, bottleneck, name='encoder')
@@ -333,12 +399,8 @@ def build_autoencoder(encoding_dim: int, number_features: int, regularizer: tf.k
     BN3 = layers.BatchNormalization()(D3)
     # decoder first Hidden Layer - H3
     H3 = layers.Dense(second_layer_size, activation='relu', kernel_regularizer=regularizer)(BN3)
-    # decoder second Dropout Layer - D4
-    D4 = layers.Dropout(dropout)(H3)
-    # decoder second Batch Normalization Layer - BN4 
-    BN4 = layers.BatchNormalization()(D4)
     # decoder reconstruction layer - O1
-    O1 = layers.Dense(number_features, activation='sigmoid')(BN4)
+    O1 = layers.Dense(number_features, activation='sigmoid')(H3)
 
     # create the decoder model
     decoder = keras.models.Model(encoded_input, O1)
