@@ -19,14 +19,17 @@ from sklearn.ensemble import RandomForestClassifier
     
 from typing import Tuple
 
-def prepare_datasets(X: pd.DataFrame, y:pd.DataFrame, test_size:float = 0.2, swap_noise:float = 0.15):
+def prepare_datasets(X: pd.DataFrame, y:pd.DataFrame, test_size:float = 0.2, swap_noise:float = 0.15, split_ratio:float = 0.5):
     """Dataset Preprocessing function that splits the datasets into train and test sets, Selects the 25% features with more variance, 
         generates a noisy training dataset, normalizes all datasets, and returns all the preprocessed datasets needed to train the models. 
        Parameters: X: original dataset features.
                    y: original dataset labels.
                    test_size: float indicating the ratio of test to training samples.
+                   swap_noise: float indicating the percentage of samples that will be swaped to add noise to the data.
+                   split_ratio: float indicating the number of samples that will contain the first dataset, when split to work with multi-input models.
        Returns the training dataset reduced and normalized, the training dataset reduced, noisy and normalized, the test dataset reduced and normalized,
-       the train labels, the test labels, the train labels one-hot encoded and the test labels one-hot encoded
+       the train labels, the test labels, the train labels one-hot encoded,the test labels one-hot encoded,
+       the split in two training dataset, the split in two noisy dataset, and the split in two test dataset
     """
     # Split into train and test sets
     X_train, X_test, y_train, y_test = train_test_split(X,y,test_size=test_size, random_state=1) 
@@ -66,7 +69,17 @@ def prepare_datasets(X: pd.DataFrame, y:pd.DataFrame, test_size:float = 0.2, swa
     y_train_oh = keras.utils.to_categorical(OH_y_train)
     y_test_oh = keras.utils.to_categorical(OH_y_test)
     
-    return X_train_norm, X_train_swapped, X_test_norm, y_train, y_test, y_train_oh, y_test_oh
+    # Split dataset by columns
+    feature_to_split = round(X_train_norm.shape[1]/2)
+    
+    X_train_first = X_train_norm.iloc[:,:feature_to_split]
+    X_train_second = X_train_norm.iloc[:,feature_to_split:]
+    X_swapped_first = X_train_swapped.iloc[:,:feature_to_split]
+    X_swapped_second = X_train_swapped.iloc[:,feature_to_split:]
+    X_test_first = X_test_norm.iloc[:,:feature_to_split]
+    X_test_second = X_test_norm.iloc[:,feature_to_split:]
+    
+    return X_train_norm, X_train_swapped, X_test_norm, y_train, y_test, y_train_oh, y_test_oh, X_train_first, X_train_second, X_swapped_first, X_swapped_second, X_test_first, X_test_second
 
 def perform_PCA(X_train, X_test, y_train, y_test, n_components: int):
     ## Perform PCA
@@ -92,15 +105,18 @@ def perform_PCA(X_train, X_test, y_train, y_test, n_components: int):
     plt.show()
     print(f"PCA on single-modal explained variance ratio: {pca.explained_variance_ratio_.sum()}")
     
+    pc1_explained_variance = pca.explained_variance_ratio_[0]
+    pc2_explained_variance = pca.explained_variance_ratio_[1]
+    pc1_ratio = pc1_explained_variance / (pc1_explained_variance + pc2_explained_variance)
+
     # Plot First 2 Components training set
-    ax = plt.subplot(1,2,1)
-    plot_principal_components(X_train_pca_labeled[:,0], X_train_pca_labeled[:,1] ,X_train_pca_labeled[:,-1] , num_labels, ax)
+    ax = plt.subplot(1,1,1)
+    plot_principal_components(X_train_pca_labeled[:,0], X_train_pca_labeled[:,1] ,X_train_pca_labeled[:,-1], pc1_ratio , num_labels, ax)
     
     # Plot First 2 Components test set  
-    ax = plt.subplot(1,2,2)
-    plot_principal_components(X_test_pca_labeled[:,0], X_test_pca_labeled[:,1] ,X_test_pca_labeled[:,-1] , num_labels, ax)
+    ax = plt.subplot(1,1,1)
+    plot_principal_components(X_test_pca_labeled[:,0], X_test_pca_labeled[:,1] ,X_test_pca_labeled[:,-1] , pc1_ratio, num_labels, ax)
     
-    plt.show()
     return X_train_pca, X_test_pca
     
 def perform_KPCA(X_train, X_test, y_train, y_test, n_components=20, kernel="rbf", gamma=0.008, variance_threshold=0.025):
@@ -168,10 +184,9 @@ def build_and_train_autoencoder(X_train_input, X_train_reconstruct, encoding_dim
                             loss="mse",
                             metrics=['mse'])
     
-    
     # Set Early Stop Callback And Reduce LR on Plateu
     early_stop = keras.callbacks.EarlyStopping(monitor='loss', min_delta=0.0001, patience=10,  mode='auto', baseline=None, restore_best_weights=False, verbose=1)
-    rlrop = keras.callbacks.ReduceLROnPlateau(monitor='loss', min_delta=0.001, patience=5, verbose=1, mode='auto')
+    rlrop = keras.callbacks.ReduceLROnPlateau(monitor='loss', min_delta=0.0001, patience=5, verbose=1, mode='auto')
     
     ## TRAINING
     # Fit the training data into the autoencoder.
@@ -188,13 +203,55 @@ def build_and_train_autoencoder(X_train_input, X_train_reconstruct, encoding_dim
     loss = history.history["loss"][-1] 
     return autoencoder, encoder, decoder, loss
 
+def build_and_train_multi_autoencoder(X_train_input, X_train_reconstruct, encoding_dim=20, regularizer=tf.keras.regularizers.l1_l2(0.0001,0), dropout=0.5, epochs=100, mu=0.5):
+    """Single Input Autoencoder building and training function
+       Parameters: X_train: training dataset.
+                   X_test: test dataset.
+                   y_train: training labels.
+                   y_test: test labels.
+                   encoding_dim: Size of the latent space (bottleneck layer size).
+                   regularizer: keras regularizer object
+                   dropout: float indicating dropout probability
+                   epochs: number of epochs to train the model
+                   mu: weight balance for each layer (i.e. mu=0.5 -> each layer loss function has equal weight)
+       Returns the 3 trained models: full autoencoder, the encoder part and the decoder part. We will use the encoder to get the latent representation.
+    """
+    # Set Optimizer: Adam with learning rate=0.001
+    optimizer = tf.keras.optimizers.Adam(0.001)
+    ## Call autoencoder build function and get the AE, the encoder and the decoder.
+    autoencoder_multi, encoder_multi, decoder_multi = build_multi_autoencoder(encoding_dim=encoding_dim, number_features=(X_train_input[0].shape[1],X_train_input[1].shape[1]), regularizer=regularizer, dropout=dropout)
+    # Compile the autoencoder using Mean Square Error loss function.
+    autoencoder_multi.compile(optimizer=optimizer,
+                            loss=["mse","mse"],
+                            loss_weights=[mu, 1-mu],
+                            metrics=['mse'])
+    
+    # Set Early Stop Callback And Reduce LR on Plateu
+    early_stop = keras.callbacks.EarlyStopping(monitor='loss', min_delta=0.00005, patience=10,  mode='auto', baseline=None, restore_best_weights=False, verbose=1)
+    rlrop = keras.callbacks.ReduceLROnPlateau(monitor='loss', min_delta=0.0001, patience=5, verbose=0, mode='auto')
+    
+    # Fit the training data into the multi-input DAE.
+    history = autoencoder_multi.fit(X_train_input,X_train_reconstruct,
+                                      epochs=epochs,
+                                      verbose=1,
+                                      callbacks=[early_stop, rlrop])
+    # Plot training vs validation losses
+    plt.plot(history.history["loss"], c = 'b', label = "Training")
+    plt.title("Autoencoder (Multi) Loss during training epochs")
+    plt.legend()
+    plt.show()
+    loss = history.history["loss"][-1] 
+    print(loss)
+
+    return autoencoder_multi, encoder_multi, decoder_multi, loss
+
 def encode_dataset(X, encoder):
     # Encode datasets using the trained encoder.
-    X_train_encoded = encoder.predict(X)
+    X_encoded = encoder.predict(X)
     # Renormalize data
     scaler = MinMaxScaler()
-    X_train_encoded = pd.DataFrame(scaler.fit_transform(X_train_encoded))
-    return X_train_encoded
+    X_encoded = pd.DataFrame(scaler.fit_transform(X_encoded))
+    return X_encoded
 
 
 def classify(X, X_test, y, y_test, model_type="Model"):
@@ -376,7 +433,8 @@ def build_autoencoder(encoding_dim: int, number_features: int, regularizer: tf.k
     print(f"Compression: {number_features/encoding_dim}")
 
     first_layer_size = 400
-    second_layer_size = number_features/120
+
+    ## input->400->encoding_dim->Dropout->BatchNorm->400->input
     
     ## ENCODER
     # encoder first input placeholder.
@@ -398,7 +456,7 @@ def build_autoencoder(encoding_dim: int, number_features: int, regularizer: tf.k
     # decoder first Batch Normalization Layer - BN3 
     BN3 = layers.BatchNormalization()(D3)
     # decoder first Hidden Layer - H3
-    H3 = layers.Dense(second_layer_size, activation='relu', kernel_regularizer=regularizer)(BN3)
+    H3 = layers.Dense(first_layer_size, activation='relu', kernel_regularizer=regularizer)(BN3)
     # decoder reconstruction layer - O1
     O1 = layers.Dense(number_features, activation='sigmoid')(H3)
 
@@ -413,20 +471,90 @@ def build_autoencoder(encoding_dim: int, number_features: int, regularizer: tf.k
     
     return autoencoder, encoder, decoder
 
+def build_multi_autoencoder(encoding_dim: int, number_features: Tuple, regularizer: tf.keras.regularizers.Regularizer, dropout: float):
+    """Two-input autoencoder build function
+       Parameters: encoding_dim: Size of the latent space (bottleneck layer size).
+                   number_features: Tuple with the sizes of the two inputs.
+                   regularizer: keras regularizer object
+       Returns the 3 models: full autoencoder, the encoder part and the decoder part
+    """
+    if dropout > 1:
+        dropout = 1
+    elif dropout < 0:
+        dropout = 0
+    # this is the reduction of our encoded representations, in times.
+    print(f"Compression: {sum(number_features)/encoding_dim}")
+
+    first_layer_size = 200
+    
+    ## input_first -> 400 -\                                          /-> 400 -> input_first
+    ##                      |-> encoding_dim -> dropout -> batchNorm |
+    ## input_second-> 400 -/                                          \-> 400 -> input_second
+    
+    ## First Dataset input path
+    # encoder first input placeholder.
+    first_input = layers.Input(shape=(number_features[0]))
+    # encoder first path first Hidden Layer - H11
+    H11 = layers.Dense(first_layer_size, activation='relu', kernel_regularizer=regularizer)(first_input)
+   
+    ## Second Dataset input path
+    # encoder second input placeholder
+    second_input = layers.Input(shape=(number_features[1]))
+    # encoder second path first Hidden Layer - H21
+    H21 = layers.Dense(first_layer_size, activation='relu', kernel_regularizer=regularizer)(second_input)
+    
+    ## Concatenate paths - Bottleneck 
+    concatenated = layers.concatenate([H11, H21], axis=-1)
+    bottleneck = layers.Dense(encoding_dim, activation='relu', kernel_regularizer=regularizer)(concatenated)
+
+    # this model maps an input to its encoded representation
+    encoder = keras.models.Model([first_input,second_input], bottleneck, name='encoder')
+
+    ## Decoder Outputs
+    # Decoder Input Layer - Encoding dimension - D1
+    encoded_input = layers.Input(shape=(encoding_dim,))
+    # decoder bottleneck Dropout Layer - Db
+    Db = layers.Dropout(dropout)(encoded_input)
+    # decoder bottleneck Batch Normalization Layer - BNb 
+    BNb = layers.BatchNormalization()(Db)
+    
+    ## Paths Split
+    ## First Dataset output path
+    # decoder first path first Hidden Layer - H12
+    H12 = layers.Dense(first_layer_size, activation='relu', kernel_regularizer=regularizer)(BNb)
+    # decoder first path reconstruction layer - O1
+    O1 = layers.Dense(number_features[0], activation='sigmoid')(H12)
+    
+    ## Second path output hidden
+    # decoder second path first Hidden Layer - H22
+    H22 = layers.Dense(first_layer_size, activation='relu', kernel_regularizer=regularizer)(BNb)
+    # decoder second path reconstruction layer - O2
+    O2 = layers.Dense(number_features[1], activation='sigmoid')(H22)
+
+    # create the decoder model
+    decoder = keras.models.Model(encoded_input, [O1, O2])
+
+    # create the full autoencoder
+    encoder_model = encoder([first_input, second_input])
+    decoder_model = decoder(encoder_model)
+
+    autoencoder = keras.models.Model([first_input,second_input], decoder_model, name="autoencoder")
+    
+    return autoencoder, encoder, decoder
 
 ## PLOT FUNCTIONS
-def plot_principal_components(pc1, pc2, y, num_labels, ax):
+def plot_principal_components(pc1, pc2, y, pc1_ratio, num_labels, ax):
     sns.scatterplot(x=pc1, 
                     y=pc2, 
                     alpha = 0.8, 
-                    s= 75, legend='full', 
+                    s= 50, legend='full', 
                     hue=y,
                     palette=sns.color_palette("hls")[:(-num_labels-1):-1])
     ax.legend(bbox_to_anchor=(1, 1), loc=1, borderaxespad=0.,framealpha=1, frameon=True, fontsize="x-small")
-    ax.set_xlabel("PC 1")
-    ax.set_ylabel("PC 2")
-    ax.figure.set_size_inches( (16,8) )
+    ax.set_xlabel(f"PC 1 {pc1_ratio:.2f}")
+    ax.set_ylabel(f"PC 2 {1-pc1_ratio:.2f}")
+    ax.figure.set_size_inches((4*(pc1_ratio/(1 - pc1_ratio)) , 4))
     ax.set_title("PCA")
     plt.yticks(rotation=45) 
-    
+    plt.show()
 
