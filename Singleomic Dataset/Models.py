@@ -11,7 +11,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MinMaxScaler, LabelEncoder
 from sklearn.decomposition import PCA, KernelPCA
 from sklearn.feature_selection import VarianceThreshold
-from sklearn.metrics import silhouette_samples, silhouette_score, normalized_mutual_info_score, confusion_matrix, classification_report
+from sklearn.metrics import silhouette_samples, silhouette_score, normalized_mutual_info_score, confusion_matrix, classification_report, roc_auc_score, roc_curve, auc
 from sklearn.cluster import KMeans, SpectralClustering, AgglomerativeClustering
 from sklearn.linear_model import LogisticRegression
 from sklearn.svm import SVC
@@ -264,10 +264,10 @@ def classify(X, X_test, y, y_test, model_type="Model"):
        Returns the test accuracy for the 3 models.
     """
     print(f"Results for {model_type}: \n")
-    lr_accuracy = logistic_regression(X, X_test, y, y_test)
-    svm_accuracy = support_vector_machine(X, X_test, y, y_test)
-    rf_accuracy = random_forest(X, X_test, y, y_test)
-    return lr_accuracy, svm_accuracy, rf_accuracy
+    lr_accuracy, lr_auc = logistic_regression(X, X_test, y, y_test)
+    svm_accuracy, svm_auc = support_vector_machine(X, X_test, y, y_test)
+    rf_accuracy, rf_auc = random_forest(X, X_test, y, y_test)
+    return lr_accuracy, svm_accuracy, rf_accuracy, lr_auc, svm_auc, rf_auc
     
 def logistic_regression(X_train, X_test, y_train, y_test):
     """Logistic Regression classifier function, with parameters tuned in Singleomic_Classifiers notebook. Prints the confusion matrix and classification report.
@@ -281,7 +281,9 @@ def logistic_regression(X_train, X_test, y_train, y_test):
     clf.fit(X_train, y_train)
     # Predict classification with final model
     y_pred = clf.predict(X_test)
-
+    y_score = clf.predict_proba(X_test)
+    
+    roc_auc = calc_roc_curve(y_test, y_score[:,1])
     cm = confusion_matrix(y_test,y_pred)
 
     print(cm)
@@ -290,7 +292,7 @@ def logistic_regression(X_train, X_test, y_train, y_test):
     test_score = clf.score(X_test  , y_test)
     print("Training set score for Logistic Regression: %f" % clf.score(X_train, y_train))
     print("Testing  set score for Logistic Regression: %f" % test_score)
-    return test_score
+    return test_score, roc_auc
 
 def support_vector_machine(X_train, X_test, y_train, y_test):
     """Support Vector Machine classifier function, with parameters tuned in Singleomic_Classifiers notebook. Prints the confusion matrix and classification report.
@@ -300,11 +302,13 @@ def support_vector_machine(X_train, X_test, y_train, y_test):
                    y_test: test labels.
         Returns: The model test accuracy
     """
-    svm = SVC(kernel = 'rbf', random_state = 0, gamma=0.1 , C=0.1)
+    svm = SVC(kernel = 'rbf', random_state = 0, probability=True, gamma=0.1 , C=0.1)
     svm.fit(X_train, y_train)
     # Predict classification with final model
     y_pred = svm.predict(X_test)
-
+    y_score = svm.predict_proba(X_test)
+    
+    roc_auc = calc_roc_curve(y_test, y_score[:,1])
     cm = confusion_matrix(y_test,y_pred)
 
     print(cm)
@@ -313,7 +317,7 @@ def support_vector_machine(X_train, X_test, y_train, y_test):
     test_score = svm.score(X_test  , y_test)
     print("Training set score for SVM: %f" % svm.score(X_train, y_train))
     print("Testing  set score for SVM: %f" % test_score)
-    return test_score
+    return test_score, roc_auc
 
 def random_forest(X_train, X_test, y_train, y_test):
     """Random Forest classifier function, with parameters tuned in Singleomic_Classifiers notebook. Prints the confusion matrix and classification report.
@@ -326,7 +330,9 @@ def random_forest(X_train, X_test, y_train, y_test):
     rfc = RandomForestClassifier(random_state=0, class_weight="balanced_subsample", n_estimators=140, max_depth=12).fit(X_train, y_train) # try class_weights "balanced" and "balanced_subsample"
     # Predict classification with final model
     y_pred = rfc.predict(X_test)
-
+    y_score = rfc.predict_proba(X_test)
+    
+    roc_auc = calc_roc_curve(y_test, y_score[:,1])
     cm = confusion_matrix(y_test,y_pred)
 
     print(cm)
@@ -335,7 +341,27 @@ def random_forest(X_train, X_test, y_train, y_test):
     test_score = rfc.score(X_test  , y_test)
     print("Training set score for RFC: %f" % rfc.score(X_train, y_train))
     print("Testing  set score for RFC: %f" % test_score)
-    return test_score
+    return test_score, roc_auc
+ 
+    
+def calc_roc_curve(y_test, y_pred):
+    # ROC AUC
+    fpr, tpr, _ = roc_curve(y_test, y_pred)
+    roc_auc = auc(fpr,tpr)
+
+    plt.figure()
+    lw = 2
+    plt.plot(fpr, tpr, color='darkorange',
+             lw=lw, label='ROC curve (area = %0.2f)' % roc_auc)
+    plt.plot([0, 1], [0, 1], color='navy', lw=lw, linestyle='--')
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel('False Positive Rate')
+    plt.ylabel('True Positive Rate')
+    plt.title('Receiver operating characteristic example')
+    plt.legend(loc="lower right")
+    plt.show()
+    return roc_auc
     
 def cluster(X, y, model_type="Model"):
     """Clustering function. Performs clustering algorithms (KMeans, Hierarchical Clustering and Spectral Clustering) on the input dataset.
