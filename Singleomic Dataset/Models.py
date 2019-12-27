@@ -7,7 +7,7 @@ import matplotlib.cm as cm
 import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import layers
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.preprocessing import MinMaxScaler, LabelEncoder
 from sklearn.decomposition import PCA, KernelPCA
 from sklearn.feature_selection import VarianceThreshold
@@ -148,17 +148,21 @@ def perform_KPCA(X_train, X_test, y_train, y_test, n_components=20, kernel="rbf"
 
     print(X_kpca_var_ratio[:6].sum())
 
+    pc1_explained_variance = X_kpca_var_ratio[0]
+    pc2_explained_variance = X_kpca_var_ratio[1]
+    pc1_ratio = pc1_explained_variance / (pc1_explained_variance + pc2_explained_variance)
+    
     sns.set_style("white")
     sns.set_context("talk")
     sns.set_style("ticks")
   
     # Plot First 2 Components training set
     ax = plt.subplot(1,2,1)
-    plot_principal_components(X_kpca_train_labeled[:,0], X_kpca_train_labeled[:,1] , X_kpca_train_labeled[:,-1] , num_labels, ax)
+    plot_principal_components(X_kpca_train_labeled[:,0], X_kpca_train_labeled[:,1] , X_kpca_train_labeled[:,-1], pc1_ratio, num_labels, ax)
     
     # Plot First 2 Components test set  
     ax = plt.subplot(1,2,2)
-    plot_principal_components(X_kpca_test_labeled[:,0], X_kpca_test_labeled[:,1] ,X_kpca_test_labeled[:,-1] , num_labels, ax)
+    plot_principal_components(X_kpca_test_labeled[:,0], X_kpca_test_labeled[:,1] ,X_kpca_test_labeled[:,-1], pc1_ratio, num_labels, ax)
     
     plt.show()
 
@@ -268,8 +272,30 @@ def classify(X, X_test, y, y_test, model_type="Model"):
     svm_accuracy, svm_auc = support_vector_machine(X, X_test, y, y_test)
     rf_accuracy, rf_auc = random_forest(X, X_test, y, y_test)
     return lr_accuracy, svm_accuracy, rf_accuracy, lr_auc, svm_auc, rf_auc
+
+def classify_with_cv(X, X_test, y, y_test, model_type="Model"):
+    """Classification function. Classifies the X dataset using the 3 models: LR, SVM y RF
+       Parameters: X: training dataset.
+                   X_test: test dataset.
+                   y: training labels.
+                   y_test: test labels.
+                   model_type: name of the model, for displaying
+       Returns the test accuracy for the 3 models.
+    """
+    print(f"Results for {model_type}: \n")
+    params_grid = [{'C': [0.0001,0.0005,0.001,0.005,0.01,0.05,0.075,0.1, 0.5]}]
+    lr_accuracy, lr_auc = logistic_regression(X, X_test, y, y_test, params_grid)
     
-def logistic_regression(X_train, X_test, y_train, y_test):
+    params_grid = [{'gamma': [1e-3,5e-3,1e-2,5e-2,1e-1,5e-1],
+                         'C': [0.001,0.005,0.01,0.05,0.1,0.5]}]
+    svm_accuracy, svm_auc = support_vector_machine(X, X_test, y, y_test, params_grid)
+    
+    params_grid = [{'n_estimators': [80,90,100,110,115,120], 'max_depth':[8,9,10,11,12]}]
+    rf_accuracy, rf_auc = random_forest(X, X_test, y, y_test, params_grid)
+    
+    return [lr_accuracy, svm_accuracy, rf_accuracy, lr_auc, svm_auc, rf_auc]
+    
+def logistic_regression(X_train, X_test, y_train, y_test, params_grid=[]):
     """Logistic Regression classifier function, with parameters tuned in Singleomic_Classifiers notebook. Prints the confusion matrix and classification report.
        Parameters: X: training dataset.
                    X_test: test dataset.
@@ -277,8 +303,22 @@ def logistic_regression(X_train, X_test, y_train, y_test):
                    y_test: test labels.
         Returns: The model test accuracy
     """
-    clf = LogisticRegression(random_state=0, solver='lbfgs', dual=False, penalty='l2', C=0.08)
-    clf.fit(X_train, y_train)
+    clf = LogisticRegression(random_state=0, solver='lbfgs', dual=False, penalty='l2')
+
+    if len(params_grid) == 0:
+        params_grid = [{'C':[0.08]}]
+        
+    # Perform Cross Validation Grid Search to find best hyperparamters
+    clf_grid = GridSearchCV(estimator=clf, param_grid=params_grid, cv=5)
+    clf_grid.fit(X_train, y_train)
+
+    # Print training scores
+    print('Best score for training data:', clf_grid.best_score_,"\n") 
+    print('Best C:',clf_grid.best_estimator_.C,"\n") 
+
+    # Select the estimator with the best hyperparameters
+    clf = clf_grid.best_estimator_
+    
     # Predict classification with final model
     y_pred = clf.predict(X_test)
     y_score = clf.predict_proba(X_test)
@@ -294,7 +334,7 @@ def logistic_regression(X_train, X_test, y_train, y_test):
     print("Testing  set score for Logistic Regression: %f" % test_score)
     return test_score, roc_auc
 
-def support_vector_machine(X_train, X_test, y_train, y_test):
+def support_vector_machine(X_train, X_test, y_train, y_test, params_grid=[]):
     """Support Vector Machine classifier function, with parameters tuned in Singleomic_Classifiers notebook. Prints the confusion matrix and classification report.
        Parameters: X: training dataset.
                    X_test: test dataset.
@@ -302,8 +342,24 @@ def support_vector_machine(X_train, X_test, y_train, y_test):
                    y_test: test labels.
         Returns: The model test accuracy
     """
-    svm = SVC(kernel = 'rbf', random_state = 0, probability=True, gamma=0.1 , C=0.1)
-    svm.fit(X_train, y_train)
+    if len(params_grid) == 0:
+        params_grid = [{'C':[0.1]},{"gamma":[0.1]}]
+
+    svm = SVC(kernel = 'rbf', random_state = 0, probability=True)
+    # Perform CV to tune parameters for best SVM fit
+
+    # Perform Cross Validation Grid Search to find best hyperparamters
+    svm_grid = GridSearchCV(estimator=svm, param_grid=params_grid, cv=5)
+    svm_grid.fit(X_train, y_train)
+
+    # Print training scores
+    print('Best score for training data:', svm_grid.best_score_,"\n") 
+    print('Best C:',svm_grid.best_estimator_.C,"\n") 
+    print('Best Gamma:',svm_grid.best_estimator_.gamma,"\n")
+
+    # Select the estimator with the best hyperparameters
+    svm = svm_grid.best_estimator_
+
     # Predict classification with final model
     y_pred = svm.predict(X_test)
     y_score = svm.predict_proba(X_test)
@@ -319,7 +375,7 @@ def support_vector_machine(X_train, X_test, y_train, y_test):
     print("Testing  set score for SVM: %f" % test_score)
     return test_score, roc_auc
 
-def random_forest(X_train, X_test, y_train, y_test):
+def random_forest(X_train, X_test, y_train, y_test, params_grid=[]):
     """Random Forest classifier function, with parameters tuned in Singleomic_Classifiers notebook. Prints the confusion matrix and classification report.
        Parameters: X: training dataset.
                    X_test: test dataset.
@@ -327,7 +383,22 @@ def random_forest(X_train, X_test, y_train, y_test):
                    y_test: test labels.
         Returns: The model test accuracy
     """
-    rfc = RandomForestClassifier(random_state=0, class_weight="balanced_subsample", n_estimators=140, max_depth=12).fit(X_train, y_train) # try class_weights "balanced" and "balanced_subsample"
+    if len(params_grid) == 0:
+        params_grid = [{'n_estimators':[140]},{"max_depth":[12]}]
+    
+    rfc = RandomForestClassifier(random_state=0, class_weight="balanced_subsample") # try class_weights "balanced" and "balanced_subsample"
+    
+    # Perform Cross Validation Grid Search to find best hyperparamters
+    rfc_grid = GridSearchCV(estimator=rfc, param_grid=params_grid, cv=5)
+    rfc_grid.fit(X_train, y_train)
+
+    # Print training scores
+    print('Best score for training data:', rfc_grid.best_score_,"\n") 
+    print('Best #estimators:',rfc_grid.best_estimator_.n_estimators,"\n") 
+    print('Best max depth:',rfc_grid.best_estimator_.max_depth,"\n") 
+
+    # Select the estimator with the best hyperparameters
+    rfc = rfc_grid.best_estimator_
     # Predict classification with final model
     y_pred = rfc.predict(X_test)
     y_score = rfc.predict_proba(X_test)
@@ -358,7 +429,7 @@ def calc_roc_curve(y_test, y_pred):
     plt.ylim([0.0, 1.05])
     plt.xlabel('False Positive Rate')
     plt.ylabel('True Positive Rate')
-    plt.title('Receiver operating characteristic example')
+    plt.title('Receiver operating characteristic')
     plt.legend(loc="lower right")
     plt.show()
     return roc_auc
@@ -374,7 +445,7 @@ def cluster(X, y, model_type="Model"):
     silhouette_kmeans, mutual_info_kmeans = k_means(X, y, n_clusters, model_type)
     silhouette_spectral, mutual_info_spectral = spectral_cluster(X, y, n_clusters, model_type)
     silhouette_hierarchical, mutual_info_hierarchical = hierarchical_cluster(X, y, n_clusters, model_type)
-    return silhouette_kmeans, mutual_info_kmeans, silhouette_spectral, mutual_info_spectral, silhouette_hierarchical, mutual_info_hierarchical
+    return [silhouette_kmeans, mutual_info_kmeans, silhouette_spectral, mutual_info_spectral, silhouette_hierarchical, mutual_info_hierarchical]
 
 def k_means(X, y, n_clusters, model_type="Model"):
     silhouette_scores = []
