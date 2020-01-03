@@ -59,8 +59,8 @@ def prepare_datasets(X: pd.DataFrame, y:pd.DataFrame, test_size:float = 0.2, swa
     X_test_norm = X_test
 
     X_train_norm = pd.DataFrame(scaler.fit_transform(X_train_norm))
-    X_train_swapped = pd.DataFrame(scaler.fit_transform(X_train_swapped))
     X_test_norm = pd.DataFrame(scaler.transform(X_test_norm))
+    X_train_swapped = pd.DataFrame(scaler.fit_transform(X_train_swapped))
      
     # One hot encode labels
     OH_encoder = LabelEncoder()
@@ -384,7 +384,7 @@ def random_forest(X_train, X_test, y_train, y_test, params_grid=[]):
         Returns: The model test accuracy
     """
     if len(params_grid) == 0:
-        params_grid = [{'n_estimators':[140]},{"max_depth":[12]}]
+        params_grid = [{'n_estimators':[110]},{"max_depth":[12]}]
     
     rfc = RandomForestClassifier(random_state=0, class_weight="balanced_subsample") # try class_weights "balanced" and "balanced_subsample"
     
