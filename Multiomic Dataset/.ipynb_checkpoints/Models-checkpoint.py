@@ -108,20 +108,12 @@ def prepare_datasets(X_first: pd.DataFrame, X_second:pd.DataFrame, y:pd.DataFram
     return X_first_norm, X_second_norm, X_swapped_first_norm, X_swapped_second_norm, X_test_first_norm, X_test_second_norm, X_train_concat, X_swapped_concat, X_test_concat, y_train, y_test, y_train_oh, y_test_oh
 
 
-def perform_PCA(X_train, X_test, y_train, y_test, n_components: int):
+def perform_PCA(X_train, y_train, X_test=None, y_test=None, n_components:int = 10):
     ## Perform PCA
     pca = PCA(n_components=n_components, random_state=1)
 
     X_train_pca = pca.fit_transform(X_train)
-    X_test_pca = pca.transform(X_test)
     X_train_pca_labeled = np.c_[X_train_pca , y_train]
-    X_test_pca_labeled = np.c_[X_test_pca , y_test]
-
-    num_labels = y_train.nunique()[0]
-    
-    sns.set_style("white")
-    sns.set_context("talk")
-    sns.set_style("ticks")
     
     ## Plot components ordered by higher variance
     ax1 = plt.subplot(1,1,1)
@@ -135,18 +127,26 @@ def perform_PCA(X_train, X_test, y_train, y_test, n_components: int):
     pc1_explained_variance = pca.explained_variance_ratio_[0]
     pc2_explained_variance = pca.explained_variance_ratio_[1]
     pc1_ratio = pc1_explained_variance / (pc1_explained_variance + pc2_explained_variance)
+    
+    num_labels = y_train.nunique()[0]
 
     # Plot First 2 Components training set
     ax = plt.subplot(1,1,1)
     plot_principal_components(X_train_pca_labeled[:,0], X_train_pca_labeled[:,1] ,X_train_pca_labeled[:,-1], pc1_ratio , num_labels, ax)
     
-    # Plot First 2 Components test set  
-    ax = plt.subplot(1,1,1)
-    plot_principal_components(X_test_pca_labeled[:,0], X_test_pca_labeled[:,1] ,X_test_pca_labeled[:,-1] , pc1_ratio, num_labels, ax)
+    X_test_pca = []
+    
+    if X_test != None :
+        X_test_pca = pca.transform(X_test)
+        X_test_pca_labeled = np.c_[X_test_pca , y_test]
+
+        # Plot First 2 Components test set  
+        ax = plt.subplot(1,1,1)
+        plot_principal_components(X_test_pca_labeled[:,0], X_test_pca_labeled[:,1] ,X_test_pca_labeled[:,-1] , pc1_ratio, num_labels, ax)
     
     return X_train_pca, X_test_pca
 
-def perform_KPCA(X_train, X_test, y_train, y_test, n_components=20, kernel="rbf", gamma=0.008, variance_threshold=0.025):
+def perform_KPCA(X_train, y_train, X_test=None, y_test=None, n_components=20, kernel="rbf", gamma=0.008, variance_threshold=0.025):
     ## Feature selection
     X_train_select = X_train
     selector = VarianceThreshold(variance_threshold)
@@ -179,10 +179,6 @@ def perform_KPCA(X_train, X_test, y_train, y_test, n_components=20, kernel="rbf"
     pc2_explained_variance = X_kpca_var_ratio[1]
     pc1_ratio = pc1_explained_variance / (pc1_explained_variance + pc2_explained_variance)
     
-    sns.set_style("white")
-    sns.set_context("talk")
-    sns.set_style("ticks")
-  
     # Plot First 2 Components training set
     ax = plt.subplot(1,1,1)
     plot_principal_components(X_kpca_train_labeled[:,0], X_kpca_train_labeled[:,1] , X_kpca_train_labeled[:,-1], pc1_ratio, num_labels, ax)
@@ -227,7 +223,7 @@ def perform_multi_KPCA(X_first, X_second, y, kernel="rbf", gamma=0.008, mu=0.5):
     
         return X_kpca, kpca
     
-def build_and_train_autoencoder(X_train_input, X_train_reconstruct, encoding_dim=20, regularizer=tf.keras.regularizers.l1_l2(0.0001,0), dropout=0.5, epochs=100):
+def build_and_train_autoencoder(X_train_input, X_train_reconstruct, validation_data, encoding_dim=20, regularizer=tf.keras.regularizers.l1_l2(0.0001,0), dropout=0.5, epochs=100):
     """Single Input Autoencoder building and training function
        Parameters: X_train: training dataset.
                    X_test: test dataset.
@@ -248,18 +244,20 @@ def build_and_train_autoencoder(X_train_input, X_train_reconstruct, encoding_dim
                             metrics=['mse'])
     
     # Set Early Stop Callback And Reduce LR on Plateu
-    early_stop = keras.callbacks.EarlyStopping(monitor='loss', min_delta=0.0001, patience=10,  mode='auto', baseline=None, restore_best_weights=False, verbose=1)
+    early_stop = tf.keras.callbacks.EarlyStopping(monitor='loss', min_delta=0.00001, patience=10,  mode='auto', baseline=None, restore_best_weights=False, verbose=1)
     rlrop = keras.callbacks.ReduceLROnPlateau(monitor='loss', min_delta=0.0001, patience=5, verbose=1, mode='auto')
     
     ## TRAINING
     # Fit the training data into the autoencoder.
     history = autoencoder.fit(X_train_input,
                               X_train_reconstruct,
+                              validation_data=validation_data,
                               epochs=epochs,
                               verbose=0,
                               callbacks=[early_stop, rlrop])
     # Plot training vs validation losses
     plt.plot(history.history["loss"], c = 'b', label = "Training")
+    plt.plot(history.history["val_loss"], c = (0.5, 0.3, 0.2), label = "Validation")
     plt.title("Autoencoder Loss during training epochs")
     plt.legend()
     plt.show()
@@ -308,6 +306,13 @@ def build_and_train_multi_autoencoder(X_train_input, X_train_reconstruct, encodi
     print(loss)
 
     return autoencoder_multi, encoder_multi, decoder_multi, loss
+
+class CustomEarlyStopping(keras.callbacks.EarlyStopping):
+    def on_epoch_end(self, epoch, logs=None):
+        if (epoch % 50 == 0):
+            print(f"epoch {epoch}")
+            print(self.get_monitor_value(logs))
+            print(self.min_delta)
 
 # Define the model using the keras functional API
 def build_autoencoder(encoding_dim: int, number_features: int, regularizer: tf.keras.regularizers.Regularizer, dropout: float):
@@ -631,9 +636,10 @@ def cluster(X, y, model_type="Model"):
     silhouette_kmeans, mutual_info_kmeans = k_means(X, y, n_clusters, model_type)
     silhouette_spectral, mutual_info_spectral = spectral_cluster(X, y, n_clusters, model_type)
     silhouette_hierarchical, mutual_info_hierarchical = hierarchical_cluster(X, y, n_clusters, model_type)
-    return [silhouette_kmeans, mutual_info_kmeans, silhouette_spectral, mutual_info_spectral, silhouette_hierarchical, mutual_info_hierarchical]
+    return [silhouette_kmeans, silhouette_spectral, silhouette_hierarchical ,mutual_info_kmeans, mutual_info_spectral, mutual_info_hierarchical]
 
-def k_means(X, y, n_clusters, model_type="Model"):
+def k_means(X:pd.DataFrame, y:pd.DataFrame, n_clusters:int, model_type:str ="Model"):
+
     silhouette_scores = []
     mutual_info_scores = []
     mutual_info = 0
@@ -642,8 +648,13 @@ def k_means(X, y, n_clusters, model_type="Model"):
         cluster_labels = kmeans.fit_predict(X)
         silhouette_avg = silhouette_score(X, cluster_labels)
         if (n==2):
-            mutual_info = normalized_mutual_info_score(y, cluster_labels,average_method='arithmetic')
+            mutual_info = normalized_mutual_info_score(np.ravel(y), cluster_labels,average_method='arithmetic')
             print(f"mutual information: {mutual_info}")
+            ## PCA to visualize new labels
+            pca = PCA(n_components=n_components, random_state=1)
+            X_train_pca = pca.fit_transform(X)
+            X_train_pca_labeled = np.c_[X , y]
+            X_train_pca_cluster_labeled = np.c_[X , cluster_labels]
         
         print(f"{model_type} {n} clusters -  silhoutte score: {silhouette_avg}")
         silhouette_scores.append(silhouette_avg)
@@ -653,6 +664,7 @@ def k_means(X, y, n_clusters, model_type="Model"):
     plt.ylabel('Score')
     plt.title('Elbow Curve')
     plt.show()
+    
     return silhouette_scores[0], mutual_info
 
 def spectral_cluster(X, y, n_clusters, model_type="Model"):
