@@ -198,6 +198,7 @@ def perform_multi_KPCA(X_first, X_second, y, kernel="rbf", gamma=0.008, mu=0.5):
         # Use Ktot to perform KPCA 
         kpca = KernelPCA(kernel="precomputed")
         X_kpca = kpca.fit_transform(Ktot)
+        X_test_kpca = kpca.transform(X_test_select)
         X_kpca_var = np.var(X_kpca,0)
         X_kpca_var_ratio = X_kpca_var / sum(X_kpca_var)
         X_kpca_train_labeled = np.c_[X_kpca , y]
@@ -219,7 +220,7 @@ def perform_multi_KPCA(X_first, X_second, y, kernel="rbf", gamma=0.008, mu=0.5):
         ax = plt.subplot(1,1,1)
         plot_principal_components(X_kpca_train_labeled[:,0], X_kpca_train_labeled[:,1] ,X_kpca_train_labeled[:,-1], pc1_ratio, num_labels, ax)
     
-        return X_kpca, kpca
+        return X_kpca, X_test_kpca, kpca
     
 def build_and_train_autoencoder(X_train_input, X_train_reconstruct, validation_data=None, encoding_dim=20, regularizer=tf.keras.regularizers.l1_l2(0.0001,0), dropout=0.5, epochs=100):
     """Single Input Autoencoder building and training function
