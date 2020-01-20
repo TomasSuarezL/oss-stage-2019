@@ -41,26 +41,24 @@ def prepare_datasets(X_first: pd.DataFrame, X_second:pd.DataFrame, y:pd.DataFram
                 the test labels one-hot encoded
        the split in two training dataset, the split in two noisy dataset, and the split in two test dataset
     """
-    # Split into train and test sets
-    X_train_first, X_test_first, X_train_second, X_test_second, y_train, y_test = train_test_split(X_first, X_second, y, test_size=test_size, random_state=1) 
-    
     # SELECT 25% OF FEATURES WITH HIGHER VARIANCE FIRST DATASET 
-    X_std = np.std(X_train_first)
+    X_std = np.std(X_first)
     X_threshold = np.percentile(X_std, 75)
     X_select = X_std > X_threshold
-    X_train_first = X_train_first.loc[:,X_select]
-    X_test_first = X_test_first.loc[:,X_select]
+    X_first_filt = X_first.loc[:,X_select]
     
     # SELECT 25% OF FEATURES WITH HIGHER VARIANCE SECOND DATASET
-    X_std = np.std(X_train_second)
+    X_std = np.std(X_second)
     X_threshold = np.percentile(X_std, 75)
     X_select = X_std > X_threshold
-    X_train_second = X_train_second.loc[:,X_select]
-    X_test_second = X_test_second.loc[:,X_select]
-    
+    X_second_filt = X_second.loc[:,X_select]
+   
+    # Split into train and test sets
+    X_train_first, X_test_first, X_train_second, X_test_second, y_train, y_test = train_test_split(X_first_filt, X_second_filt, y, test_size=test_size, random_state=2) 
+       
     # Add swap noise to training dataset
-    X_swapped_first = X_train_first
-    X_swapped_second = X_train_second
+    X_swapped_first = X_train_first.copy()
+    X_swapped_second = X_train_second.copy()
     num_swaps = round(X_train_first.shape[0]*swap_noise)
     print(f"swapping: {num_swaps} rows.")
 
@@ -102,13 +100,13 @@ def prepare_datasets(X_first: pd.DataFrame, X_second:pd.DataFrame, y:pd.DataFram
     
     ## CONCAT DATASETS    
     X_train_concat = pd.concat([X_first_norm, X_second_norm],axis=1)
-    X_swapped_concat = pd.concat([X_swapped_first, X_swapped_second],axis=1)
+    X_swapped_concat = pd.concat([X_swapped_first_norm, X_swapped_second_norm],axis=1, sort=False)
     X_test_concat = pd.concat([X_test_first_norm, X_test_second_norm],axis=1)
         
     return X_first_norm, X_second_norm, X_swapped_first_norm, X_swapped_second_norm, X_test_first_norm, X_test_second_norm, X_train_concat, X_swapped_concat, X_test_concat, y_train, y_test, y_train_oh, y_test_oh
 
 
-def perform_PCA(X_train, y_train, X_test=None, y_test=None, n_components:int = 10):
+def perform_PCA(X_train, y_train, X_test=pd.DataFrame(), y_test=pd.DataFrame(), n_components:int = 10):
     ## Perform PCA
     pca = PCA(n_components=n_components, random_state=1)
 
@@ -136,7 +134,7 @@ def perform_PCA(X_train, y_train, X_test=None, y_test=None, n_components:int = 1
     
     X_test_pca = []
     
-    if X_test != None :
+    if not X_test.empty :
         X_test_pca = pca.transform(X_test)
         X_test_pca_labeled = np.c_[X_test_pca , y_test]
 
@@ -223,7 +221,7 @@ def perform_multi_KPCA(X_first, X_second, y, kernel="rbf", gamma=0.008, mu=0.5):
     
         return X_kpca, kpca
     
-def build_and_train_autoencoder(X_train_input, X_train_reconstruct, validation_data, encoding_dim=20, regularizer=tf.keras.regularizers.l1_l2(0.0001,0), dropout=0.5, epochs=100):
+def build_and_train_autoencoder(X_train_input, X_train_reconstruct, validation_data=None, encoding_dim=20, regularizer=tf.keras.regularizers.l1_l2(0.0001,0), dropout=0.5, epochs=100):
     """Single Input Autoencoder building and training function
        Parameters: X_train: training dataset.
                    X_test: test dataset.
@@ -246,11 +244,12 @@ def build_and_train_autoencoder(X_train_input, X_train_reconstruct, validation_d
     # Set Early Stop Callback And Reduce LR on Plateu
     early_stop = tf.keras.callbacks.EarlyStopping(monitor='loss', min_delta=0.00001, patience=10,  mode='auto', baseline=None, restore_best_weights=False, verbose=1)
     rlrop = keras.callbacks.ReduceLROnPlateau(monitor='loss', min_delta=0.0001, patience=5, verbose=1, mode='auto')
-    
+   
     ## TRAINING
     # Fit the training data into the autoencoder.
     history = autoencoder.fit(X_train_input,
                               X_train_reconstruct,
+                              validation_split=0.2,
                               validation_data=validation_data,
                               epochs=epochs,
                               verbose=0,
@@ -293,10 +292,12 @@ def build_and_train_multi_autoencoder(X_train_input, X_train_reconstruct, encodi
     rlrop = keras.callbacks.ReduceLROnPlateau(monitor='loss', min_delta=0.0001, patience=5, verbose=1, mode='auto')
     
     # Fit the training data into the multi-input DAE.
-    history = autoencoder_multi.fit(X_train_input,X_train_reconstruct,
-                                      epochs=epochs,
-                                      verbose=0,
-                                      callbacks=[early_stop, rlrop])
+    history = autoencoder_multi.fit(X_train_input,
+                                    X_train_reconstruct,
+                                    epochs=epochs,
+                                    verbose=0,
+                                    validation_split=0.2,
+                                    callbacks=[early_stop, rlrop])
     # Plot training vs validation losses
     plt.plot(history.history["loss"], c = 'b', label = "Training")
     plt.title("Autoencoder (Multi) Loss during training epochs")
@@ -632,7 +633,7 @@ def cluster(X, y, model_type="Model"):
                    model_type: the name of the model that was used to compute the input dataset.
         Returns: the resulting silhouette score and mutual information score
     """
-    n_clusters = [2,3,4,5,6]
+    n_clusters = [2,3,4]
     silhouette_kmeans, mutual_info_kmeans = k_means(X, y, n_clusters, model_type)
     silhouette_spectral, mutual_info_spectral = spectral_cluster(X, y, n_clusters, model_type)
     silhouette_hierarchical, mutual_info_hierarchical = hierarchical_cluster(X, y, n_clusters, model_type)
@@ -647,19 +648,20 @@ def k_means(X:pd.DataFrame, y:pd.DataFrame, n_clusters:int, model_type:str ="Mod
         kmeans = KMeans(n_clusters=n, random_state=0)
         cluster_labels = kmeans.fit_predict(X)
         silhouette_avg = silhouette_score(X, cluster_labels)
+        mutual_info = normalized_mutual_info_score(np.ravel(y), cluster_labels,average_method='arithmetic')
         if (n==2):
-            mutual_info = normalized_mutual_info_score(np.ravel(y), cluster_labels,average_method='arithmetic')
-            print(f"mutual information: {mutual_info}")
             ## PCA to visualize new labels
-            pca = PCA(n_components=n_components, random_state=1)
-            X_train_pca = pca.fit_transform(X)
-            X_train_pca_labeled = np.c_[X , y]
-            X_train_pca_cluster_labeled = np.c_[X , cluster_labels]
-        
-        print(f"{model_type} {n} clusters -  silhoutte score: {silhouette_avg}")
+            perform_PCA(X, pd.DataFrame(cluster_labels), n_components=2)
+
+        print(f"{n} clusters -  silhoutte score: {silhouette_avg} - mutual information: {mutual_info}")
         silhouette_scores.append(silhouette_avg)
-        
-    plt.plot(n_clusters,silhouette_scores)
+        mutual_info_scores.append(mutual_info)
+
+    ax1 = plt.subplot(1,2,1)
+    ax1.figure.set_size_inches((12, 4))
+    plt.plot(n_clusters,silhouette_scores,c='b')
+    ax1 = plt.subplot(1,2,2)
+    plt.plot(n_clusters,mutual_info_scores, c='r')
     plt.xlabel('Number of Clusters')
     plt.ylabel('Score')
     plt.title('Elbow Curve')
@@ -675,14 +677,20 @@ def spectral_cluster(X, y, n_clusters, model_type="Model"):
         spectral = SpectralClustering(n_clusters=n, random_state=0)
         cluster_labels = spectral.fit_predict(X)
         silhouette_avg = silhouette_score(X, cluster_labels)
+        mutual_info = normalized_mutual_info_score(y, cluster_labels,average_method='arithmetic')
         if (n==2):
-            mutual_info = normalized_mutual_info_score(y, cluster_labels,average_method='arithmetic')
-            print(f"mutual information: {mutual_info}")
+            ## PCA to visualize new labels
+            perform_PCA(X, pd.DataFrame(cluster_labels), n_components=2)
         
-        print(f"{model_type} {n} clusters -  silhoutte score: {silhouette_avg}")
+        print(f"{n} clusters -  silhoutte score: {silhouette_avg} - mutual information: {mutual_info}")
         silhouette_scores.append(silhouette_avg)
+        mutual_info_scores.append(mutual_info)
         
-    plt.plot(n_clusters,silhouette_scores)
+    ax1 = plt.subplot(1,2,1)
+    ax1.figure.set_size_inches((12, 4))
+    plt.plot(n_clusters,silhouette_scores,c='b')
+    ax1 = plt.subplot(1,2,2)
+    plt.plot(n_clusters,mutual_info_scores, c='r')
     plt.xlabel('Number of Clusters')
     plt.ylabel('Score')
     plt.title('Elbow Curve')
@@ -697,14 +705,20 @@ def hierarchical_cluster(X, y, n_clusters, model_type="Model"):
         hierarchical = AgglomerativeClustering(n_clusters=n)
         cluster_labels = hierarchical.fit_predict(X)
         silhouette_avg = silhouette_score(X, cluster_labels)
+        mutual_info = normalized_mutual_info_score(y, cluster_labels,average_method='arithmetic')
         if (n==2):
-            mutual_info = normalized_mutual_info_score(y, cluster_labels,average_method='arithmetic')
-            print(f"mutual information: {mutual_info}")
+            ## PCA to visualize new labels
+            perform_PCA(X, pd.DataFrame(cluster_labels), n_components=2)
         
-        print(f"{model_type} {n} clusters -  silhoutte score: {silhouette_avg}")
+        print(f"{n} clusters -  silhoutte score: {silhouette_avg} - mutual information: {mutual_info}")
         silhouette_scores.append(silhouette_avg)
+        mutual_info_scores.append(mutual_info)
         
-    plt.plot(n_clusters,silhouette_scores)
+    ax1 = plt.subplot(1,2,1)
+    ax1.figure.set_size_inches((12, 4))
+    plt.plot(n_clusters,silhouette_scores,c='b')
+    ax1 = plt.subplot(1,2,2)
+    plt.plot(n_clusters,mutual_info_scores, c='r')
     plt.xlabel('Number of Clusters')
     plt.ylabel('Score')
     plt.title('Elbow Curve')
@@ -733,8 +747,6 @@ def plot_principal_components(pc1, pc2, y, pc1_ratio, num_labels, ax):
     plt.show()
 
 def plot_hyperparam_tune(hyperparam, results, legends):
-
-    
     
     ax.legend(bbox_to_anchor=(1, 1), loc=1, borderaxespad=0.,framealpha=1, frameon=True, fontsize="x-small")
     ax.set_xlabel(f"PC 1 {pc1_ratio:.2f}")

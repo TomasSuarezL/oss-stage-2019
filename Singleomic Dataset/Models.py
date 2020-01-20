@@ -41,7 +41,7 @@ def prepare_datasets(X: pd.DataFrame, y:pd.DataFrame, test_size:float = 0.2, swa
     X_test = X_test.loc[:,X_select]
     
     # Add swap noise to training dataset
-    X_swapped = X_train
+    X_swapped = X_train.copy()
     num_swaps = round(X_train.shape[0]*swap_noise)
     print(f"swapping: {num_swaps} rows.")
 
