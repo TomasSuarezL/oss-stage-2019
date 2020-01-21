@@ -667,7 +667,7 @@ def plot_principal_components(pc1, pc2, y, pc1_ratio, num_labels, ax):
     ax.legend(bbox_to_anchor=(1, 1), loc=1, borderaxespad=0.,framealpha=1, frameon=True, fontsize="x-small")
     ax.set_xlabel(f"PC 1 {pc1_ratio:.2f}")
     ax.set_ylabel(f"PC 2 {1-pc1_ratio:.2f}")
-    ax.figure.set_size_inches((4*(pc1_ratio/(1 - pc1_ratio)) , 4))
+    ax.figure.set_size_inches((4*(pc1_ratio/(1 - pc1_ratio+0.1)) , 4))
     ax.set_title("PCA")
     plt.yticks(rotation=45) 
     plt.show()
