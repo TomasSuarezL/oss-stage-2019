@@ -81,20 +81,12 @@ def prepare_datasets(X: pd.DataFrame, y:pd.DataFrame, test_size:float = 0.2, swa
     
     return X_train_norm, X_train_swapped, X_test_norm, y_train, y_test, y_train_oh, y_test_oh, X_train_first, X_train_second, X_swapped_first, X_swapped_second, X_test_first, X_test_second
 
-def perform_PCA(X_train, X_test, y_train, y_test, n_components: int):
+def perform_PCA(X_train, y_train, X_test=pd.DataFrame(), y_test=pd.DataFrame(), n_components:int = 10):
     ## Perform PCA
     pca = PCA(n_components=n_components, random_state=1)
 
     X_train_pca = pca.fit_transform(X_train)
-    X_test_pca = pca.transform(X_test)
     X_train_pca_labeled = np.c_[X_train_pca , y_train]
-    X_test_pca_labeled = np.c_[X_test_pca , y_test]
-
-    num_labels = y_train.nunique()
-    
-    sns.set_style("white")
-    sns.set_context("talk")
-    sns.set_style("ticks")
     
     ## Plot components ordered by higher variance
     ax1 = plt.subplot(1,1,1)
@@ -108,18 +100,26 @@ def perform_PCA(X_train, X_test, y_train, y_test, n_components: int):
     pc1_explained_variance = pca.explained_variance_ratio_[0]
     pc2_explained_variance = pca.explained_variance_ratio_[1]
     pc1_ratio = pc1_explained_variance / (pc1_explained_variance + pc2_explained_variance)
+    
+    num_labels = y_train.nunique()[0]
 
     # Plot First 2 Components training set
     ax = plt.subplot(1,1,1)
     plot_principal_components(X_train_pca_labeled[:,0], X_train_pca_labeled[:,1] ,X_train_pca_labeled[:,-1], pc1_ratio , num_labels, ax)
     
-    # Plot First 2 Components test set  
-    ax = plt.subplot(1,1,1)
-    plot_principal_components(X_test_pca_labeled[:,0], X_test_pca_labeled[:,1] ,X_test_pca_labeled[:,-1] , pc1_ratio, num_labels, ax)
+    X_test_pca = []
+    
+    if not X_test.empty :
+        X_test_pca = pca.transform(X_test)
+        X_test_pca_labeled = np.c_[X_test_pca , y_test]
+
+        # Plot First 2 Components test set  
+        ax = plt.subplot(1,1,1)
+        plot_principal_components(X_test_pca_labeled[:,0], X_test_pca_labeled[:,1] ,X_test_pca_labeled[:,-1] , pc1_ratio, num_labels, ax)
     
     return X_train_pca, X_test_pca
     
-def perform_KPCA(X_train, X_test, y_train, y_test, n_components=20, kernel="rbf", gamma=0.008, variance_threshold=0.025):
+def perform_KPCA(X_train, y_train, X_test=None, y_test=None, n_components=20, kernel="rbf", gamma=0.008, variance_threshold=0.025):
     ## Feature selection
     X_train_select = X_train
     selector = VarianceThreshold(variance_threshold)
@@ -137,7 +137,7 @@ def perform_KPCA(X_train, X_test, y_train, y_test, n_components=20, kernel="rbf"
     X_kpca_train_labeled = np.c_[X_kpca , y_train]
     X_kpca_test_labeled = np.c_[X_test_kpca , y_test]
 
-    num_labels = y_train.nunique()
+    num_labels = y_train.nunique()[0]
         
     ax1 = plt.subplot(1,1,1)
     ax1.figure.set_size_inches((8, 4))
@@ -152,23 +152,17 @@ def perform_KPCA(X_train, X_test, y_train, y_test, n_components=20, kernel="rbf"
     pc2_explained_variance = X_kpca_var_ratio[1]
     pc1_ratio = pc1_explained_variance / (pc1_explained_variance + pc2_explained_variance)
     
-    sns.set_style("white")
-    sns.set_context("talk")
-    sns.set_style("ticks")
-  
     # Plot First 2 Components training set
-    ax = plt.subplot(1,2,1)
+    ax = plt.subplot(1,1,1)
     plot_principal_components(X_kpca_train_labeled[:,0], X_kpca_train_labeled[:,1] , X_kpca_train_labeled[:,-1], pc1_ratio, num_labels, ax)
     
     # Plot First 2 Components test set  
-    ax = plt.subplot(1,2,2)
+    ax = plt.subplot(1,1,1)
     plot_principal_components(X_kpca_test_labeled[:,0], X_kpca_test_labeled[:,1] ,X_kpca_test_labeled[:,-1], pc1_ratio, num_labels, ax)
-    
-    plt.show()
 
     return X_kpca, X_test_kpca
-
-def build_and_train_autoencoder(X_train_input, X_train_reconstruct, encoding_dim=20, regularizer=tf.keras.regularizers.l1_l2(0.0001,0), dropout=0.5, epochs=100):
+    
+def build_and_train_autoencoder(X_train_input, X_train_reconstruct, validation_data=None, encoding_dim=20, regularizer=tf.keras.regularizers.l1_l2(0.0001,0), dropout=0.5, epochs=100):
     """Single Input Autoencoder building and training function
        Parameters: X_train: training dataset.
                    X_test: test dataset.
@@ -189,18 +183,21 @@ def build_and_train_autoencoder(X_train_input, X_train_reconstruct, encoding_dim
                             metrics=['mse'])
     
     # Set Early Stop Callback And Reduce LR on Plateu
-    early_stop = keras.callbacks.EarlyStopping(monitor='loss', min_delta=0.0001, patience=10,  mode='auto', baseline=None, restore_best_weights=False, verbose=1)
+    early_stop = tf.keras.callbacks.EarlyStopping(monitor='loss', min_delta=0.00001, patience=10,  mode='auto', baseline=None, restore_best_weights=False, verbose=1)
     rlrop = keras.callbacks.ReduceLROnPlateau(monitor='loss', min_delta=0.0001, patience=5, verbose=1, mode='auto')
-    
+   
     ## TRAINING
     # Fit the training data into the autoencoder.
     history = autoencoder.fit(X_train_input,
                               X_train_reconstruct,
+                              validation_split=0.2,
+                              validation_data=validation_data,
                               epochs=epochs,
                               verbose=0,
                               callbacks=[early_stop, rlrop])
     # Plot training vs validation losses
     plt.plot(history.history["loss"], c = 'b', label = "Training")
+    plt.plot(history.history["val_loss"], c = (0.5, 0.3, 0.2), label = "Validation")
     plt.title("Autoencoder Loss during training epochs")
     plt.legend()
     plt.show()
@@ -271,7 +268,7 @@ def classify(X, X_test, y, y_test, model_type="Model"):
     lr_accuracy, lr_auc = logistic_regression(X, X_test, y, y_test)
     svm_accuracy, svm_auc = support_vector_machine(X, X_test, y, y_test)
     rf_accuracy, rf_auc = random_forest(X, X_test, y, y_test)
-    return lr_accuracy, svm_accuracy, rf_accuracy, lr_auc, svm_auc, rf_auc
+    return [lr_accuracy, svm_accuracy, rf_accuracy, lr_auc, svm_auc, rf_auc]
 
 def classify_with_cv(X, X_test, y, y_test, model_type="Model"):
     """Classification function. Classifies the X dataset using the 3 models: LR, SVM y RF
@@ -384,7 +381,7 @@ def random_forest(X_train, X_test, y_train, y_test, params_grid=[]):
         Returns: The model test accuracy
     """
     if len(params_grid) == 0:
-        params_grid = [{'n_estimators':[110]},{"max_depth":[12]}]
+        params_grid = [{'n_estimators':[140]},{"max_depth":[12]}]
     
     rfc = RandomForestClassifier(random_state=0, class_weight="balanced_subsample") # try class_weights "balanced" and "balanced_subsample"
     
@@ -441,13 +438,14 @@ def cluster(X, y, model_type="Model"):
                    model_type: the name of the model that was used to compute the input dataset.
         Returns: the resulting silhouette score and mutual information score
     """
-    n_clusters = [2,3,4,5,6]
+    n_clusters = [2,3,4]
     silhouette_kmeans, mutual_info_kmeans = k_means(X, y, n_clusters, model_type)
     silhouette_spectral, mutual_info_spectral = spectral_cluster(X, y, n_clusters, model_type)
     silhouette_hierarchical, mutual_info_hierarchical = hierarchical_cluster(X, y, n_clusters, model_type)
-    return [silhouette_kmeans, mutual_info_kmeans, silhouette_spectral, mutual_info_spectral, silhouette_hierarchical, mutual_info_hierarchical]
+    return [silhouette_kmeans, silhouette_spectral, silhouette_hierarchical ,mutual_info_kmeans, mutual_info_spectral, mutual_info_hierarchical]
 
-def k_means(X, y, n_clusters, model_type="Model"):
+def k_means(X:pd.DataFrame, y:pd.DataFrame, n_clusters:int, model_type:str ="Model"):
+
     silhouette_scores = []
     mutual_info_scores = []
     mutual_info = 0
@@ -455,19 +453,26 @@ def k_means(X, y, n_clusters, model_type="Model"):
         kmeans = KMeans(n_clusters=n, random_state=0)
         cluster_labels = kmeans.fit_predict(X)
         silhouette_avg = silhouette_score(X, cluster_labels)
-        if (n==2):
-            mutual_info = normalized_mutual_info_score(y, cluster_labels,average_method='arithmetic')
-            print(f"mutual information: {mutual_info}")
+        mutual_info = normalized_mutual_info_score(np.ravel(y), cluster_labels,average_method='arithmetic')
         
-        print(f"{model_type} {n} clusters -  silhoutte score: {silhouette_avg}")
+        ## PCA to visualize new labels
+        perform_PCA(X, pd.DataFrame(cluster_labels), n_components=2)
+
+        print(f"{n} clusters -  silhoutte score: {silhouette_avg} - mutual information: {mutual_info}")
         silhouette_scores.append(silhouette_avg)
-        
-    plt.plot(n_clusters,silhouette_scores)
+        mutual_info_scores.append(mutual_info)
+
+    ax1 = plt.subplot(1,2,1)
+    ax1.figure.set_size_inches((12, 4))
+    plt.plot(n_clusters,silhouette_scores,c='b')
+    ax1 = plt.subplot(1,2,2)
+    plt.plot(n_clusters,mutual_info_scores, c='r')
     plt.xlabel('Number of Clusters')
     plt.ylabel('Score')
     plt.title('Elbow Curve')
     plt.show()
-    return silhouette_scores[0], mutual_info
+    
+    return silhouette_scores[0], mutual_info_scores[0]
 
 def spectral_cluster(X, y, n_clusters, model_type="Model"):
     silhouette_scores = []
@@ -477,19 +482,25 @@ def spectral_cluster(X, y, n_clusters, model_type="Model"):
         spectral = SpectralClustering(n_clusters=n, random_state=0)
         cluster_labels = spectral.fit_predict(X)
         silhouette_avg = silhouette_score(X, cluster_labels)
+        mutual_info = normalized_mutual_info_score(y, cluster_labels,average_method='arithmetic')
         if (n==2):
-            mutual_info = normalized_mutual_info_score(y, cluster_labels,average_method='arithmetic')
-            print(f"mutual information: {mutual_info}")
+            ## PCA to visualize new labels
+            perform_PCA(X, pd.DataFrame(cluster_labels), n_components=2)
         
-        print(f"{model_type} {n} clusters -  silhoutte score: {silhouette_avg}")
+        print(f"{n} clusters -  silhoutte score: {silhouette_avg} - mutual information: {mutual_info}")
         silhouette_scores.append(silhouette_avg)
+        mutual_info_scores.append(mutual_info)
         
-    plt.plot(n_clusters,silhouette_scores)
+    ax1 = plt.subplot(1,2,1)
+    ax1.figure.set_size_inches((12, 4))
+    plt.plot(n_clusters,silhouette_scores,c='b')
+    ax1 = plt.subplot(1,2,2)
+    plt.plot(n_clusters,mutual_info_scores, c='r')
     plt.xlabel('Number of Clusters')
     plt.ylabel('Score')
     plt.title('Elbow Curve')
     plt.show()
-    return silhouette_scores[0], mutual_info
+    return silhouette_scores[0], mutual_info_scores[0]
 
 def hierarchical_cluster(X, y, n_clusters, model_type="Model"):
     silhouette_scores = []
@@ -499,19 +510,25 @@ def hierarchical_cluster(X, y, n_clusters, model_type="Model"):
         hierarchical = AgglomerativeClustering(n_clusters=n)
         cluster_labels = hierarchical.fit_predict(X)
         silhouette_avg = silhouette_score(X, cluster_labels)
+        mutual_info = normalized_mutual_info_score(y, cluster_labels,average_method='arithmetic')
         if (n==2):
-            mutual_info = normalized_mutual_info_score(y, cluster_labels,average_method='arithmetic')
-            print(f"mutual information: {mutual_info}")
+            ## PCA to visualize new labels
+            perform_PCA(X, pd.DataFrame(cluster_labels), n_components=2)
         
-        print(f"{model_type} {n} clusters -  silhoutte score: {silhouette_avg}")
+        print(f"{n} clusters -  silhoutte score: {silhouette_avg} - mutual information: {mutual_info}")
         silhouette_scores.append(silhouette_avg)
+        mutual_info_scores.append(mutual_info)
         
-    plt.plot(n_clusters,silhouette_scores)
+    ax1 = plt.subplot(1,2,1)
+    ax1.figure.set_size_inches((12, 4))
+    plt.plot(n_clusters,silhouette_scores,c='b')
+    ax1 = plt.subplot(1,2,2)
+    plt.plot(n_clusters,mutual_info_scores, c='r')
     plt.xlabel('Number of Clusters')
     plt.ylabel('Score')
     plt.title('Elbow Curve')
     plt.show()
-    return silhouette_scores[0], mutual_info
+    return silhouette_scores[0],  mutual_info_scores[0]
 
 # Define the model using the keras functional API
 def build_autoencoder(encoding_dim: int, number_features: int, regularizer: tf.keras.regularizers.Regularizer, dropout: float):

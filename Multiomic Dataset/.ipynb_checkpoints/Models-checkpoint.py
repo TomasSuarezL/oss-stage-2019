@@ -187,7 +187,7 @@ def perform_KPCA(X_train, y_train, X_test=None, y_test=None, n_components=20, ke
 
     return X_kpca, X_test_kpca
 
-def perform_multi_KPCA(X_first, X_second, y, kernel="rbf", gamma=0.008, mu=0.5):
+def perform_multi_KPCA(X_first, X_second, y, X_test_first=[], X_test_second=[], kernel="rbf", gamma=0.008, mu=0.5):
         num_labels = y.nunique()[0]
         # Apply rbf kernel to divided datasets
         K1 = rbf_kernel(X=X_first, gamma=gamma)
@@ -195,9 +195,16 @@ def perform_multi_KPCA(X_first, X_second, y, kernel="rbf", gamma=0.008, mu=0.5):
 
         Ktot = mu*K1 + (1-mu)*K2
         
+        # Apply rbf kernel to divided test datasets
+        K1 = rbf_kernel(X=X_test_first, Y=X_first, gamma=gamma)
+        K2 = rbf_kernel(X=X_test_second, Y=X_second, gamma=gamma)
+
+        Ktot_test = mu*K1 + (1-mu)*K2
+        
         # Use Ktot to perform KPCA 
         kpca = KernelPCA(kernel="precomputed")
         X_kpca = kpca.fit_transform(Ktot)
+        X_test_kpca = kpca.transform(Ktot_test)
         X_kpca_var = np.var(X_kpca,0)
         X_kpca_var_ratio = X_kpca_var / sum(X_kpca_var)
         X_kpca_train_labeled = np.c_[X_kpca , y]
@@ -219,7 +226,7 @@ def perform_multi_KPCA(X_first, X_second, y, kernel="rbf", gamma=0.008, mu=0.5):
         ax = plt.subplot(1,1,1)
         plot_principal_components(X_kpca_train_labeled[:,0], X_kpca_train_labeled[:,1] ,X_kpca_train_labeled[:,-1], pc1_ratio, num_labels, ax)
     
-        return X_kpca, kpca
+        return X_kpca, X_test_kpca, kpca
     
 def build_and_train_autoencoder(X_train_input, X_train_reconstruct, validation_data=None, encoding_dim=20, regularizer=tf.keras.regularizers.l1_l2(0.0001,0), dropout=0.5, epochs=100):
     """Single Input Autoencoder building and training function
@@ -667,7 +674,7 @@ def k_means(X:pd.DataFrame, y:pd.DataFrame, n_clusters:int, model_type:str ="Mod
     plt.title('Elbow Curve')
     plt.show()
     
-    return silhouette_scores[0], mutual_info
+    return silhouette_scores[0], mutual_info_scores[0]
 
 def spectral_cluster(X, y, n_clusters, model_type="Model"):
     silhouette_scores = []
@@ -695,7 +702,7 @@ def spectral_cluster(X, y, n_clusters, model_type="Model"):
     plt.ylabel('Score')
     plt.title('Elbow Curve')
     plt.show()
-    return silhouette_scores[0], mutual_info
+    return silhouette_scores[0],  mutual_info_scores[0]
 
 def hierarchical_cluster(X, y, n_clusters, model_type="Model"):
     silhouette_scores = []
@@ -723,7 +730,7 @@ def hierarchical_cluster(X, y, n_clusters, model_type="Model"):
     plt.ylabel('Score')
     plt.title('Elbow Curve')
     plt.show()
-    return silhouette_scores[0], mutual_info
+    return silhouette_scores[0],  mutual_info_scores[0]
     
 ## PLOT FUNCTIONS
 def plot_principal_components(pc1, pc2, y, pc1_ratio, num_labels, ax):
