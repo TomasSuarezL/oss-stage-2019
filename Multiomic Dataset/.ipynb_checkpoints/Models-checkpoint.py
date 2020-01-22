@@ -735,7 +735,7 @@ def hierarchical_cluster(X, y, n_clusters, model_type="Model"):
 ## PLOT FUNCTIONS
 def plot_principal_components(pc1, pc2, y, pc1_ratio, num_labels, ax):
     
-    size_multiplier = (pc1_ratio/(1 - pc1_ratio))
+    size_multiplier = (pc1_ratio/(1 - pc1_ratio +0.1))
     if (pc1_ratio == 1):
         size_multiplier = 1
     
